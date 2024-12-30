@@ -243,6 +243,8 @@ def process_inputs(  # noqa: C901, PLR0912, PLR0915
     msa_pairing_strategy: str,
     max_msa_seqs: int = 4096,
     use_msa_server: bool = False,
+    processed_dir: Optional[Path] = None,
+    manifest_path: Optional[Path] = None
 ) -> None:
     """Process the input data and output directory.
 
@@ -258,6 +260,10 @@ def process_inputs(  # noqa: C901, PLR0912, PLR0915
         Max number of MSA sequences, by default 4096.
     use_msa_server : bool, optional
         Whether to use the MMSeqs2 server for MSA generation, by default False.
+    processed_dir: Path, optional
+        Desired processed directory to save the structures in, default None
+    manifest_path: Path, optional
+        Desired path to save the manifest at, default None
 
     Returns
     -------
@@ -268,12 +274,18 @@ def process_inputs(  # noqa: C901, PLR0912, PLR0915
     click.echo("Processing input data.")
     existing_records = None
 
-    # Check if manifest exists at output path
-    manifest_path = out_dir / "processed" / "manifest.json"
-    if manifest_path.exists():
-        click.echo(f"Found a manifest file at output directory: {out_dir}")
+    if processed_dir is None:
+        processed_dir = out_dir / "processed"
 
-        manifest: Manifest = Manifest.load(manifest_path)
+    input_manifest_path = processed_dir / "manifest.json"
+    if manifest_path is None:
+        manifest_path = input_manifest_path
+
+    # Check if manifest exists at processed directory
+    if input_manifest_path.exists():
+        click.echo(f"Found a manifest file at: {input_manifest_path}")
+
+        manifest: Manifest = Manifest.load(input_manifest_path)
         input_ids = [d.stem for d in data]
         existing_records, processed_ids = zip(*[
             (record, record.id) for record in manifest.records if record.id in input_ids
@@ -286,9 +298,9 @@ def process_inputs(  # noqa: C901, PLR0912, PLR0915
         missing = len(input_ids) - len(processed_ids)
         if not missing:
             click.echo("All examples in data are processed. Updating the manifest")
-            # Dump updated manifest
+            # Dump updated manifest at optionally provided path
             updated_manifest = Manifest(existing_records)
-            updated_manifest.dump(out_dir / "processed" / "manifest.json")
+            updated_manifest.dump(manifest_path)
             return
 
         click.echo(f"{missing} missing ids. Preprocessing these ids")
@@ -298,8 +310,8 @@ def process_inputs(  # noqa: C901, PLR0912, PLR0915
 
     # Create output directories
     msa_dir = out_dir / "msa"
-    structure_dir = out_dir / "processed" / "structures"
-    processed_msa_dir = out_dir / "processed" / "msa"
+    structure_dir = processed_dir / "structures"
+    processed_msa_dir = processed_dir / "msa"
     predictions_dir = out_dir / "predictions"
 
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -311,7 +323,7 @@ def process_inputs(  # noqa: C901, PLR0912, PLR0915
     # Load CCD
     with ccd_path.open("rb") as file:
         ccd = pickle.load(file)  # noqa: S301
-    
+
     if existing_records is not None:
         click.echo(f"Found {len(existing_records)} records. Adding them to records")
 
@@ -417,7 +429,7 @@ def process_inputs(  # noqa: C901, PLR0912, PLR0915
 
     # Dump manifest
     manifest = Manifest(records)
-    manifest.dump(out_dir / "processed" / "manifest.json")
+    manifest.dump(manifest_path)
 
 
 @click.group()
@@ -535,6 +547,18 @@ def cli() -> None:
     help="Pairing strategy to use. Used only if --use_msa_server is set. Options are 'greedy' and 'complete'",
     default="greedy",
 )
+@click.option(
+    "--processed_dir",
+    type=click.Path(exists=False),
+    help="File path for processed structures",
+    default=None
+)
+@click.option(
+    "--manifest_path",
+    type=click.Path(exists=False),
+    help="Manifest file path",
+    default=None,
+)
 def predict(
     data: str,
     out_dir: str,
@@ -555,6 +579,8 @@ def predict(
     use_msa_server: bool = False,
     msa_server_url: str = "https://api.colabfold.com",
     msa_pairing_strategy: str = "greedy",
+    processed_dir: Optional[Path] = None,
+    manifest_path: Optional[Path] = None
 ) -> None:
     """Run predictions with Boltz-1."""
     # If cpu, write a friendly warning
@@ -585,6 +611,15 @@ def predict(
     # Download necessary data and model
     download(cache)
 
+    if processed_dir is None:
+        # Load processed data
+        processed_dir = out_dir / "processed"
+    else:
+        processed_dir = Path(processed_dir).expanduser()
+
+    if manifest_path is None:
+        manifest_path = processed_dir / "manifest.json"
+ 
     # Validate inputs
     data = check_inputs(data, out_dir, override)
     if not data:
@@ -617,12 +652,12 @@ def predict(
         use_msa_server=use_msa_server,
         msa_server_url=msa_server_url,
         msa_pairing_strategy=msa_pairing_strategy,
+        processed_dir=processed_dir,
+        manifest_path=manifest_path
     )
 
-    # Load processed data
-    processed_dir = out_dir / "processed"
     processed = BoltzProcessedInput(
-        manifest=Manifest.load(processed_dir / "manifest.json"),
+        manifest=Manifest.load(manifest_path),
         targets_dir=processed_dir / "structures",
         msa_dir=processed_dir / "msa",
     )
